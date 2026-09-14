@@ -24,6 +24,7 @@ import {
   SESSION_MANIFEST_VERSION,
   normalizeSessionFile,
   type PersistedChatSession,
+  type PersistedToolActivity,
   type SessionPdfContext
 } from '../../../shared/session-persistence'
 import type { UploadedAttachment } from '../../../shared/uploads'
@@ -5331,6 +5332,53 @@ describe('session store', () => {
       })
     ])
     expect(toPersistedSession(session).activityGroups).toEqual(session.activityGroups)
+  })
+
+  it('keeps grouped activities persistable after a newer Task completion without the group', () => {
+    useSessionStore.getState().appendUserMessage({
+      sessionId: 'transport-session-1',
+      content: 'Query the connector'
+    })
+    useSessionStore
+      .getState()
+      .beginActivityGroup('transport-session-1', 'group-call-1', 'Query project references')
+    useSessionStore.getState().upsertToolActivity({
+      sessionId: 'transport-session-1',
+      toolCallId: 'tool-connector-1',
+      eventId: 'event-connector-1',
+      status: 'completed'
+    })
+    useSessionStore.getState().completeActivityGroup('transport-session-1')
+    useSessionStore.getState().finishRun('transport-session-1')
+    const local = toPersistedSession(useSessionStore.getState().sessions[0])
+    const withoutGroup = <Activity extends PersistedToolActivity>({
+      activityGroupId,
+      ...activity
+    }: Activity): Omit<Activity, 'activityGroupId'> => {
+      void activityGroupId
+      return { ...activity, updatedAt: activity.updatedAt + 1 }
+    }
+
+    useSessionStore.getState().upsertPersistedSession({
+      ...local,
+      revision: (local.revision ?? 0) + 1,
+      updatedAt: local.updatedAt + 1,
+      activities: local.activities?.map(withoutGroup),
+      activityGroups: undefined,
+      conversationGraph: {
+        ...local.conversationGraph!,
+        activities: local.conversationGraph!.activities.map(withoutGroup),
+        activityGroups: []
+      }
+    })
+
+    const persisted = toPersistedSession(useSessionStore.getState().sessions[0])
+    expect(persisted.activities).toEqual([
+      expect.objectContaining({ id: 'tool-connector-1', activityGroupId: 'group-call-1' })
+    ])
+    expect(persisted.activityGroups).toEqual([
+      expect.objectContaining({ id: 'group-call-1', activityIds: ['tool-connector-1'] })
+    ])
   })
 
   it('does not notify the store when no started activity group can be completed', () => {
