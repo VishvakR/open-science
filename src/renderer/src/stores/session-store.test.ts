@@ -5381,6 +5381,81 @@ describe('session store', () => {
     ])
   })
 
+  it.each([
+    'consistent',
+    'ungrouped',
+    'missing-back-reference',
+    'unknown-group',
+    'unlisted-member',
+    'missing-activity',
+    'different-frame',
+    'different-branch',
+    'different-prompt',
+    'duplicate-membership'
+  ])('reconciles activity group membership: %s', (scenario) => {
+    useSessionStore.getState().appendUserMessage({
+      sessionId: 'transport-session-1',
+      content: 'Inspect the project'
+    })
+    useSessionStore.getState().beginActivityGroup('transport-session-1', 'group-1', 'Inspect')
+    useSessionStore.getState().upsertToolActivity({
+      sessionId: 'transport-session-1',
+      toolCallId: 'tool-1',
+      eventId: 'event-1',
+      status: 'completed'
+    })
+    useSessionStore.getState().completeActivityGroup('transport-session-1')
+    const local = toPersistedSession(useSessionStore.getState().sessions[0])
+    const incoming = structuredClone(local)
+    const graph = incoming.conversationGraph!
+    const activity = graph.activities[0]
+    const group = graph.activityGroups[0]
+    if (scenario === 'ungrouped') {
+      delete activity.activityGroupId
+      graph.activityGroups = []
+    }
+    if (scenario === 'missing-back-reference') delete activity.activityGroupId
+    if (scenario === 'unknown-group') activity.activityGroupId = 'unknown-group'
+    if (scenario === 'unlisted-member') group.activityIds = []
+    if (scenario === 'missing-activity') group.activityIds.push('missing-tool')
+    if (scenario === 'different-frame') group.agentFrameId = 'other-frame'
+    if (scenario === 'different-branch') group.messageBranchId = 'other-branch'
+    if (scenario === 'different-prompt') group.promptMessageId = 'other-prompt'
+    if (scenario === 'duplicate-membership') {
+      delete activity.activityGroupId
+      graph.activityGroups.push({ ...group, id: 'group-2', activityIds: [...group.activityIds] })
+    }
+    const before = structuredClone(incoming)
+    // Exercise the shared merge boundary with deliberately inconsistent membership projections.
+    const merged = mergePersistedRuntimeIdentityProjection(incoming, incoming, {
+      incomingOwnsFrameConflicts: false
+    }).conversationGraph!
+    const keepsMembership = [
+      'consistent',
+      'missing-back-reference',
+      'missing-activity',
+      'duplicate-membership'
+    ].includes(scenario)
+    expect(merged.activities[0].activityGroupId).toBe(keepsMembership ? 'group-1' : undefined)
+    expect(merged.activityGroups.map(({ activityIds }) => activityIds)).toEqual(
+      scenario === 'ungrouped'
+        ? []
+        : scenario === 'duplicate-membership'
+          ? [['tool-1'], []]
+          : [keepsMembership ? ['tool-1'] : []]
+    )
+    expect(incoming).toEqual(before)
+    if (!scenario.startsWith('different-'))
+      expect(() => validateConversationGraph(merged)).not.toThrow()
+    expect(
+      mergePersistedRuntimeIdentityProjection(
+        { ...incoming, conversationGraph: merged },
+        { ...incoming, conversationGraph: merged },
+        { incomingOwnsFrameConflicts: false }
+      ).conversationGraph
+    ).toEqual(merged)
+  })
+
   it('does not notify the store when no started activity group can be completed', () => {
     useSessionStore.getState().appendUserMessage({
       sessionId: 'transport-session-1',

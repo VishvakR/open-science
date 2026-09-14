@@ -45,12 +45,22 @@ const reconcileActivityGroupMembership = (
   graph: NonNullable<PersistedChatSession['conversationGraph']>
 ): NonNullable<PersistedChatSession['conversationGraph']> => {
   const groupsById = new Map(graph.activityGroups.map((group) => [group.id, group]))
+  const activityIdsByGroupId = new Map(
+    graph.activityGroups.map((group) => [group.id, new Set(group.activityIds)])
+  )
+  const firstGroupByActivityId = new Map<string, (typeof graph.activityGroups)[number]>()
+  for (const group of graph.activityGroups) {
+    for (const activityId of group.activityIds) {
+      if (!firstGroupByActivityId.has(activityId)) firstGroupByActivityId.set(activityId, group)
+    }
+  }
   const activities = graph.activities.map((activity): (typeof graph.activities)[number] => {
     const group = activity.activityGroupId
       ? groupsById.get(activity.activityGroupId)
-      : graph.activityGroups.find(({ activityIds }) => activityIds.includes(activity.id))
+      : firstGroupByActivityId.get(activity.id)
     if (
-      group?.activityIds.includes(activity.id) &&
+      group &&
+      activityIdsByGroupId.get(group.id)!.has(activity.id) &&
       group.agentFrameId === activity.agentFrameId &&
       group.messageBranchId === activity.messageBranchId &&
       group.promptMessageId === activity.promptMessageId
